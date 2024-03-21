@@ -1,0 +1,367 @@
+---
+title: "Text Analysis Workshop"
+format: html
+editor: visual
+---
+
+## Hello and welcome to tidy text analytics!
+
+This Quarto document covers an example workflow of how to process and analyze open ended text data.
+
+In our first section we'll be load the main libraries we'll need to start and load in our data
+
+```{r, echo=FALSE, message=FALSE}
+require(tidyverse)
+require(tidytext)
+require(janitor)
+require(lubridate)
+require(magrittr)
+
+theme_set(theme_light())
+data <- read_csv("data/emergency_data.csv") |> janitor::clean_names()
+
+head(data)
+```
+
+Next we'll convert our data into a tidy format with one row per word per message
+
+```{r}
+tidy_words <- data |>
+  select(record_id, date_and_time, notification_type, cleaned_text) |>
+  unnest_tokens(word, cleaned_text) |>
+  anti_join(stop_words)
+
+head(tidy_words)
+
+```
+
+Here we can start to explore the most common words that show up in our corpus
+
+```{r}
+tidy_words |>
+  count(word, sort = TRUE) |>
+  top_n(20)
+```
+
+Given that we have categories of interest in our data set, we can also filter per category to see common words across categories of interest
+
+```{r}
+tidy_words |>
+  filter(notification_type == "Public Health") |>
+  count(word, sort =  TRUE) |>
+  top_n(20)
+```
+
+Tables are great but we can also present this information graphically
+
+```{r}
+tidy_words |>
+  filter(notification_type %in% c("Emergency Activity",	"Public Health")) |>
+  count(word, sort =  TRUE) |>
+  top_n(25) |>
+  mutate(word = fct_reorder(word, n)) |>
+  ggplot(aes(n, word)) +
+  geom_col()
+```
+
+Another example where we split our plot of common words by categories of interest
+
+```{r}
+tidy_words |>
+  filter(notification_type %in% c("Emergency Activity", "Public Health",
+                                  "Local Mass Transit")) |>
+  group_by(notification_type) |>
+  count(word, sort = TRUE) |>
+  top_n(10) |>
+  ggplot(aes(n, word, fill = notification_type)) +
+  geom_col() +
+  facet_wrap(~ notification_type)
+```
+
+Let's move into some sentiment analyses where we can examine the emotional valence of our text data. To do that we can leverage existing sentiment lexicons (validated dictionaries) that categorize words by specific emotions or quantify them by means of polarity (e.g negative to positive).
+
+The tidytext package provides a few sentiment dictionaries which are useful. However, don't feel limited. Other lexicons exist in the form of data frames that can be added on to your data of interest. In certain instances it may be useful to customize a lexicon, or create one of your own.
+
+```{r}
+head(get_sentiments("nrc"))
+head(get_sentiments("afinn"))
+head(get_sentiments("bing"))
+```
+
+\
+Let's first explore the NRC lexicon which categorizes words across a series of emotions (e.g positive, negative, fear, trust, anticipation, etc).
+
+We can take our tidy words data frame and inner join the nrc lexicon onto our data. Now our data-set has an additional feature categorizing each word by a particular emotion
+
+```{r}
+nrc_text <- tidy_words |>
+  inner_join(get_sentiments("nrc"), by = "word")
+
+nrc_text
+
+```
+
+Let's explore the proportion of emotion words in our data set.
+
+First via a table
+
+```{r}
+emotion_prop <- nrc_text |>
+  count(sentiment, sort = TRUE) |>
+  mutate(prop = n / sum(n))
+
+
+emotion_prop
+```
+
+And now by a graph
+
+```{r}
+emotion_prop |>
+  mutate(sentiment = fct_reorder(sentiment, prop)) |>
+  ggplot(aes(prop, sentiment, fill = sentiment)) +
+  geom_col()
+```
+
+Let's see if we can see some differences across categories. For this example we'll focus on Local Mass Transit and Transportation
+
+```{r}
+#| layout-ncol: 2
+#| fig-cap: 
+#|   - "Line Plot 1"
+#|   - "Line Plot 2"
+
+nrc_text |>
+  filter(notification_type == "Local Mass Transit") |>
+  count(sentiment, sort = TRUE) |>
+  mutate(prop = n / sum(n)) |>
+  mutate(sentiment = fct_reorder(sentiment, prop)) |>
+  ggplot(aes(prop, sentiment, fill = sentiment)) +
+  geom_col()
+
+
+nrc_text |>
+  filter(notification_type == "Transportation") |>
+  count(sentiment, sort = TRUE) |>
+  mutate(prop = n / sum(n)) |>
+  mutate(sentiment = fct_reorder(sentiment, prop)) |>
+  ggplot(aes(prop, sentiment, fill = sentiment)) +
+  geom_col()
+```
+
+We're not limited to a mere categorical analysis - for example one approach we can use is examining the frequency or count of words tied to certain emotions across groups.
+
+As we see in our comparison between transportation and local mass transit it would appear that transportation has a higher frequency of words related to anticipation. Let's see if this difference is statistically significant.
+
+To do this we can process our data to count the number of emotion based words per approach
+
+```{r}
+nrc_counts <- nrc_text |>
+  group_by(record_id) |>
+  count(sentiment) |>
+  ungroup() |>
+  pivot_wider(names_from = sentiment, 
+              values_from = n,
+              values_fill = 0) |>
+  left_join(data, by = "record_id")
+
+nrc_counts
+
+```
+
+Now we can build a statistical model. Since we're working with count data we'll build a Poisson regression model.
+
+```{r}
+
+anticipation_model <- nrc_counts |>
+  filter(notification_type %in% c("Local Mass Transit", "Transportation")) |>
+  mutate(notification_type = as.factor(notification_type)) %$%
+  glm(anticipation ~ notification_type, family = poisson)
+  
+
+anticipation_model
+```
+
+We see the relative to local mass transit, transportation has a higher count of anticipation words and that this difference is statistically significant
+
+```{r}
+summary(anticipation_model)
+
+```
+
+Taking the exponent our coefficient we see this is pretty sizable difference!
+
+```{r}
+exp(anticipation_model$coefficients[2])
+```
+
+Let's take a dive into the type of anticipation words that exist across these two categories
+
+```{r}
+nrc_text |>
+  filter(sentiment == "anticipation",
+         notification_type %in% c("Transportation", "Local Mass Transit")) |>
+  count(word, sort = TRUE)
+```
+
+We're not limited to a frequency count. As we saw when we were exploring other sentiment lexicons we can leverage dictionaries that quantify words by polarity. This allows us to take the sum or average sentiment score across a particular text.
+
+```{r}
+afinn_text <- tidy_words |>
+  inner_join(get_sentiments("afinn"), by = "word") |>
+  group_by(record_id) |>
+  summarise(avg_val = mean(value, na.rm = TRUE)) |>
+  ungroup() |>
+  left_join(data, by = "record_id")
+
+afinn_text
+```
+
+Let's see if we see a difference in overall emotional valence between transportation and local mass transit
+
+```{r}
+afinn_val_model <- afinn_text |>
+  filter(notification_type %in% c("Transportation", "Local Mass Transit")) %$%
+  lm(avg_val ~ notification_type)
+
+summary(afinn_val_model)
+```
+
+```{r}
+afinn_text |>
+  filter(notification_type %in% c("Transportation", "Local Mass Transit")) %$%
+  t.test(avg_val ~ notification_type)
+
+
+
+```
+
+Using both a linear regression and t-test approach we see that this is in fact the case. Let's wrap our analysis up in a quick summary reporting our findings using the report package
+
+```{r}
+require(report)
+
+afinn_text |>
+  filter(notification_type %in% c("Transportation", "Local Mass Transit")) %$%
+  t.test(avg_val ~ notification_type) |>
+  report::report()
+```
+
+We have some other data of interest instead of notification type, like date and time of each emergency report.
+
+Let's explore average emotional valence by time of day
+
+```{r}
+afinn_by_hour <- tidy_words |>
+  filter(notification_type %in% c("Transportation", "Local Mass Transit")) |>
+  inner_join(get_sentiments("afinn"), by = "word") |>
+  mutate(hr = hour(mdy_hm(date_and_time))) |>
+  group_by(notification_type, hr) |>
+  summarise(avg_val = mean(value, na.rm = TRUE),
+            sd_val = sd(value, na.rm = TRUE),
+            n_count = n(),
+            sem = sd_val / sqrt(n_count)) 
+
+afinn_by_hour
+```
+
+```{r}
+afinn_by_hour |>
+  ggplot(aes(as.factor(hr), avg_val, group = notification_type,
+             color = notification_type)) +
+  geom_point() +
+  geom_line() +
+  geom_path()  #+ geom_errorbar(mapping =  aes(ymin = avg_val - sem,  ymax = avg_val + sem))
+```
+
+```{r}
+
+
+```
+
+```{r}
+afinn_mnth <- tidy_words |>
+  inner_join(get_sentiments("afinn"), by = "word") |>
+  mutate(mnth = month(mdy_hm(date_and_time))) |>
+  group_by(mnth) |>
+  summarise(avg_val = mean(value, na.rm = TRUE),
+            sd_val = sd(value, na.rm = TRUE),
+            n_count = n(),
+            sem = sd_val / sqrt(n_count))
+  
+afinn_mnth
+```
+
+```{r}
+afinn_mnth |>
+  ggplot(aes(as.factor(mnth), avg_val)) +
+  geom_point() +
+  geom_line() +
+  geom_path(group = 1) +
+  geom_errorbar(mapping =  aes(ymin = avg_val - sem,
+                               ymax = avg_val + sem))
+```
+
+```{r}
+tidy_words |>
+  filter(notification_type %in% c("Transportation", "Local Mass Transit")) |>
+  inner_join(get_sentiments("afinn"), by = "word") |>
+  mutate(hr = hour(mdy_hm(date_and_time))) |>
+  group_by(notification_type, hr) |>
+  summarise(avg_val = mean(value, na.rm = TRUE)) |>
+  ggplot(aes(as.factor(hr), avg_val, group = notification_type,
+             color = notification_type)) +
+  geom_point() +
+  geom_line() +
+  geom_path()
+```
+
+# We've don
+
+We've asked a lot of quant based questions of our data but let's start to search for some themes. One approach is to examine the clusters of words that are correlated with each other using the phi correlation coefficient. To accomplish this we'll add a few more packages that allow us to compute word correlations and graph a node map of our text data
+
+```{r}
+require(ggraph)
+require(widyr)
+require(igraph)
+
+
+word_cors <- tidy_words |>
+  filter(notification_type == "Public Health") |>
+  add_count(word) |>
+  filter(n > 200) |>
+  pairwise_cor(word, record_id, sort = TRUE) |> 
+  filter(correlation >= .30 & correlation <= .40)
+
+word_cors
+```
+
+We can now create a node map that will show us clusters of words. Play around with the data itself (filtering across notification types, or specifying correlation bounds) to see what clusters of words pop up.
+
+```{r}
+word_cors |>
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = correlation), show.legend = FALSE) +
+  geom_node_point(color = "lightblue", size = 5) +
+  geom_node_text(aes(label = name), repel = TRUE) +
+  theme_void()
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+Feel free to use this notebook and or the code in it to get started and further explore this data!
+
+Thank you for attending the workshop!
