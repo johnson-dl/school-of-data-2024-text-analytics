@@ -1,6 +1,6 @@
 ---
 title: "Text Analysis Workshop"
-format: html
+format: pdf
 editor: visual
 ---
 
@@ -31,8 +31,15 @@ tidy_words <- data |>
   unnest_tokens(word, cleaned_text) |>
   anti_join(stop_words)
 
+stop_words
+
+tidy_words
 head(tidy_words)
 
+```
+
+```{r}
+tidy_words
 ```
 
 Here we can start to explore the most common words that show up in our corpus
@@ -47,9 +54,11 @@ Given that we have categories of interest in our data set, we can also filter pe
 
 ```{r}
 tidy_words |>
-  filter(notification_type == "Public Health") |>
+  filter(notification_type == "Planned Events") |>
   count(word, sort =  TRUE) |>
   top_n(20)
+
+data |> count(notification_type)
 ```
 
 Tables are great but we can also present this information graphically
@@ -128,8 +137,8 @@ Let's see if we can see some differences across categories. For this example we'
 ```{r}
 #| layout-ncol: 2
 #| fig-cap: 
-#|   - "Line Plot 1"
-#|   - "Line Plot 2"
+#|   - "Local Transit"
+#|   - "Transportation"
 
 nrc_text |>
   filter(notification_type == "Local Mass Transit") |>
@@ -172,7 +181,6 @@ nrc_counts
 Now we can build a statistical model. Since we're working with count data we'll build a Poisson regression model.
 
 ```{r}
-
 anticipation_model <- nrc_counts |>
   filter(notification_type %in% c("Local Mass Transit", "Transportation")) |>
   mutate(notification_type = as.factor(notification_type)) %$%
@@ -316,7 +324,7 @@ tidy_words |>
   geom_path()
 ```
 
-# We've don
+# 
 
 We've asked a lot of quant based questions of our data but let's start to search for some themes. One approach is to examine the clusters of words that are correlated with each other using the phi correlation coefficient. To accomplish this we'll add a few more packages that allow us to compute word correlations and graph a node map of our text data
 
@@ -327,7 +335,7 @@ require(igraph)
 
 
 word_cors <- tidy_words |>
-  filter(notification_type == "Public Health") |>
+  filter(notification_type == "Transportation") |>
   add_count(word) |>
   filter(n > 200) |>
   pairwise_cor(word, record_id, sort = TRUE) |> 
@@ -349,9 +357,16 @@ word_cors |>
 
 ```
 
+If you want to highlight certain text patterns and identify that in the data.
+
+Let's say we want to identify messages that start with "This is a message...". We can create a case statement using case_when() and grepl()
+
 ```{r}
 
-
+data |>
+  mutate(says_the_thing = case_when(grepl("This is a message", email_body) ~ "Yup",
+                                    TRUE ~ "Nope")) |>
+           select(email_body, says_the_thing)
 ```
 
 ```{r}
